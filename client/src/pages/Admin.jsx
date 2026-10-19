@@ -673,7 +673,7 @@ export default function Admin() {
               </p>
               <h2
                 id="overview-heading"
-                className="mt-1 text-xl font-extrabold tracking-tight text-slate-900"
+                className="text-slate-900 font-bold"
               >
                 Platform insights
               </h2>
@@ -1146,12 +1146,12 @@ export default function Admin() {
         <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
           <div className="flex flex-col gap-5 border-b border-slate-100 p-5 sm:p-6 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-indigo-600">
+              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-indigo-600 ">
                 Accounts
               </p>
 
               <div className="mt-1 flex flex-wrap items-center gap-3">
-                <h2 className="text-2xl font-bold !text-slate-900 tracking-tight">
+                <h2 className="text-slate-900 font-bold">
                   User management
                 </h2>
 
