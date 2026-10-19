@@ -673,7 +673,7 @@ export default function Admin() {
               </p>
               <h2
                 id="overview-heading"
-                className="text-slate-900 font-bold"
+                className="mt-1 text-xl font-extrabold tracking-tight !text-black"
               >
                 Platform insights
               </h2>
@@ -1151,7 +1151,7 @@ export default function Admin() {
               </p>
 
               <div className="mt-1 flex flex-wrap items-center gap-3">
-                <h2 className="text-slate-900 font-bold">
+                <h2 className="!text-black font-bold">
                   User management
                 </h2>
 
