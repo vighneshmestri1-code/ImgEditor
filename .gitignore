@@ -28,3 +28,7 @@ desktop.ini
 
 # Editor settings
 .vscode/
+
+# Allow safe environment templates (placeholders only)
+!.env.example
+!**/.env.example
