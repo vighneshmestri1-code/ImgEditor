@@ -35,6 +35,16 @@ const SUBSCRIPTION_STATUSES = new Set([
   'expired',
 ]);
 
+// These statuses may change in Razorpay after the local record is created.
+// Refresh them from Razorpay before displaying status or creating another plan.
+const OPEN_SUBSCRIPTION_STATUSES = [
+  'created',
+  'authenticated',
+  'active',
+  'pending',
+  'halted',
+];
+
 function getPlan(planKey) {
   const definition = PLAN_DEFINITIONS[planKey];
 
@@ -132,6 +142,72 @@ function getSubscriptionDateUpdates(remote) {
   return updates;
 }
 
+/**
+ * Pull the authoritative status from Razorpay and persist it locally.
+ * This repairs missed/delayed webhooks without trusting browser input.
+ */
+async function syncSubscriptionWithRazorpay(localSubscription, razorpay) {
+  if (!localSubscription?.razorpaySubscriptionId) {
+    throw new Error(
+      'Local subscription is missing its Razorpay subscription ID.'
+    );
+  }
+
+  const remote = await razorpay.subscriptions.fetch(
+    localSubscription.razorpaySubscriptionId
+  );
+
+  if (remote?.id !== localSubscription.razorpaySubscriptionId) {
+    throw new Error('Razorpay returned a different subscription ID.');
+  }
+
+  if (
+    localSubscription.razorpayPlanId &&
+    remote.plan_id &&
+    remote.plan_id !== localSubscription.razorpayPlanId
+  ) {
+    throw new Error(
+      'The local and Razorpay subscription plan IDs do not match.'
+    );
+  }
+
+  const updates = getSubscriptionDateUpdates(remote);
+
+  if (SUBSCRIPTION_STATUSES.has(remote.status)) {
+    updates.status = remote.status;
+  }
+
+  if (Object.keys(updates).length === 0) {
+    return localSubscription;
+  }
+
+  const refreshed = await Subscription.findOneAndUpdate(
+    { _id: localSubscription._id },
+    { $set: updates },
+    { returnDocument: 'after', runValidators: true }
+  );
+
+  return refreshed || localSubscription;
+}
+
+/**
+ * Reconcile every locally open subscription for a user. There can be more
+ * than one old record from abandoned checkouts, so checking only the newest
+ * record could still block a new checkout.
+ */
+async function refreshOpenSubscriptionsForUser(userId, razorpay) {
+  const openSubscriptions = await Subscription.find({
+    user: userId,
+    status: { $in: OPEN_SUBSCRIPTION_STATUSES },
+  }).sort({ createdAt: -1 });
+
+  for (const subscription of openSubscriptions) {
+    await syncSubscriptionWithRazorpay(subscription, razorpay);
+  }
+
+  return openSubscriptions.length;
+}
+
 // GET /api/subscriptions/plans
 exports.getPlans = async (req, res) => {
   return res.status(200).json({
@@ -178,19 +254,39 @@ exports.createSubscription = async (req, res) => {
       });
     }
 
-    // Avoid accidentally creating overlapping subscriptions.
-    const existing = await Subscription.findOne({
+    // Before deciding that an earlier subscription blocks checkout, refresh
+    // all locally open records from Razorpay. A cancelled test subscription
+    // must not remain locally 'created' just because its webhook was missed.
+    const openSubscriptionQuery = {
       user: req.user._id,
-      status: {
-        $in: [
-          'created',
-          'authenticated',
-          'active',
-          'pending',
-          'halted',
-        ],
-      },
-    }).sort({ createdAt: -1 });
+      status: { $in: OPEN_SUBSCRIPTION_STATUSES },
+    };
+
+    const openSubscriptionCount = await Subscription.countDocuments(
+      openSubscriptionQuery
+    );
+
+    if (openSubscriptionCount > 0) {
+      try {
+        const syncClient = getRazorpayClient();
+        await refreshOpenSubscriptionsForUser(req.user._id, syncClient);
+      } catch (syncError) {
+        console.error(
+          'Could not reconcile existing subscriptions with Razorpay:',
+          syncError.error?.description || syncError.message
+        );
+
+        return res.status(502).json({
+          error:
+            'ImgEditor could not confirm the status of an existing subscription with Razorpay. No new subscription was created. Please refresh status or try again later.',
+        });
+      }
+    }
+
+    // Re-query after synchronization: records that Razorpay reports as
+    // cancelled/completed/expired no longer block a new checkout.
+    const existing = await Subscription.findOne(openSubscriptionQuery)
+      .sort({ createdAt: -1 });
 
     if (existing) {
       if (
@@ -198,7 +294,7 @@ exports.createSubscription = async (req, res) => {
         ['created', 'authenticated'].includes(existing.status) &&
         existing.razorpaySubscriptionId
       ) {
-        // Let the user resume the same unfinished checkout.
+        // Resume the same still-open subscription rather than creating a duplicate.
         return res.status(200).json({
           subscriptionId: existing.razorpaySubscriptionId,
           keyId: process.env.RAZORPAY_KEY_ID,
@@ -296,19 +392,54 @@ exports.createSubscription = async (req, res) => {
 
 // GET /api/subscriptions/current
 exports.getCurrentSubscription = async (req, res) => {
+  let statusSyncWarning = null;
+
   try {
-    const subscription = await Subscription.findOne({
+    // A webhook can be delayed or missed. Re-fetch all locally open records
+    // so dashboard cancellations are reflected when the user refreshes.
+    const openCount = await Subscription.countDocuments({
       user: req.user._id,
-    })
-      .sort({ createdAt: -1 })
-      .lean();
+      status: { $in: OPEN_SUBSCRIPTION_STATUSES },
+    });
+
+    if (openCount > 0) {
+      try {
+        const razorpay = getRazorpayClient();
+        await refreshOpenSubscriptionsForUser(req.user._id, razorpay);
+      } catch (syncError) {
+        statusSyncWarning =
+          'Unable to confirm the latest status with Razorpay. The displayed status may be outdated.';
+
+        console.warn(
+          'Current subscription status could not be refreshed from Razorpay:',
+          syncError.error?.description || syncError.message
+        );
+      }
+    }
+
+    // Prefer the latest non-terminal subscription (if any). If all records
+    // are cancelled/completed/expired, show the most recent historical record.
+    const subscription =
+      (await Subscription.findOne({
+        user: req.user._id,
+        status: { $in: OPEN_SUBSCRIPTION_STATUSES },
+      })
+        .sort({ createdAt: -1 })
+        .lean()) ||
+      (await Subscription.findOne({ user: req.user._id })
+        .sort({ createdAt: -1 })
+        .lean());
 
     if (!subscription) {
-      return res.status(200).json({ subscription: null });
+      return res.status(200).json({
+        subscription: null,
+        ...(statusSyncWarning ? { statusSyncWarning } : {}),
+      });
     }
 
     return res.status(200).json({
       subscription: {
+        // Keep the Mongo ID for compatibility with the existing frontend.
         id: subscription._id,
         planKey: subscription.planKey,
         status: subscription.status,
@@ -319,6 +450,7 @@ exports.getCurrentSubscription = async (req, res) => {
         nextBillingAt: subscription.nextBillingAt,
         createdAt: subscription.createdAt,
       },
+      ...(statusSyncWarning ? { statusSyncWarning } : {}),
     });
   } catch (error) {
     console.error('Fetch subscription error:', error.message);
@@ -411,12 +543,15 @@ exports.verifyCheckout = async (req, res) => {
       });
     }
 
-    if (
-      remoteSubscription.status === 'active'
-    ) {
-      localSubscription.status = 'active';
-    } else if (localSubscription.status === 'created') {
-      localSubscription.status = 'authenticated';
+    // Mirror Razorpay's actual state instead of assuming every verified
+    // Checkout response means the subscription is merely authenticated.
+    if (SUBSCRIPTION_STATUSES.has(remoteSubscription.status)) {
+      localSubscription.status = remoteSubscription.status;
+    }
+
+    const dateUpdates = getSubscriptionDateUpdates(remoteSubscription);
+    for (const [key, value] of Object.entries(dateUpdates)) {
+      localSubscription[key] = value;
     }
 
     await localSubscription.save();
@@ -446,13 +581,17 @@ exports.verifyCheckout = async (req, res) => {
 // This endpoint is verified with RAZORPAY_WEBHOOK_SECRET,
 // which is separate from RAZORPAY_KEY_SECRET.
 exports.handleWebhook = async (req, res) => {
+  const webhookEventId = req.get('x-razorpay-event-id') || null;
+
   try {
     const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
     const signature = req.get('x-razorpay-signature');
     const rawBody = req.rawBody;
 
     if (!webhookSecret) {
-      console.error('RAZORPAY_WEBHOOK_SECRET is not configured');
+      console.error('[Razorpay webhook] rejected: webhook secret is not configured', {
+        webhookEventId,
+      });
 
       return res.status(503).json({
         error: 'Webhook verification is not configured',
@@ -460,12 +599,23 @@ exports.handleWebhook = async (req, res) => {
     }
 
     if (!Buffer.isBuffer(rawBody)) {
+      console.error('[Razorpay webhook] rejected: raw body is unavailable', {
+        webhookEventId,
+      });
+
       return res.status(400).json({
         error: 'Webhook raw body is unavailable',
       });
     }
 
     if (!verifyHmac(rawBody, signature, webhookSecret)) {
+      // Never log the signature or webhook secret.
+      console.warn('[Razorpay webhook] rejected: invalid signature', {
+        webhookEventId,
+        hasSignature: Boolean(signature),
+        rawBodyBytes: rawBody.length,
+      });
+
       return res.status(400).json({
         error: 'Invalid webhook signature',
       });
@@ -476,6 +626,11 @@ exports.handleWebhook = async (req, res) => {
     try {
       event = JSON.parse(rawBody.toString('utf8'));
     } catch {
+      console.warn('[Razorpay webhook] rejected: invalid JSON', {
+        webhookEventId,
+        rawBodyBytes: rawBody.length,
+      });
+
       return res.status(400).json({
         error: 'Invalid webhook JSON',
       });
@@ -483,14 +638,30 @@ exports.handleWebhook = async (req, res) => {
 
     const eventName = event.event;
     const remoteSubscription = event.payload?.subscription?.entity;
+    const payment = event.payload?.payment?.entity;
+
+    // This is intentionally metadata-only: no secrets or full payloads are logged.
+    console.info('[Razorpay webhook] received', {
+      webhookEventId,
+      eventName: eventName || null,
+      subscriptionId: remoteSubscription?.id || null,
+      paymentId: payment?.id || null,
+      paymentStatus: payment?.status || null,
+      amountPaise: payment?.amount ?? null,
+      currency: payment?.currency || null,
+    });
 
     if (
       !eventName ||
       !remoteSubscription?.id ||
       !eventName.startsWith('subscription.')
     ) {
-      // A validly signed event outside the subscription flow
-      // does not require processing in this controller.
+      console.info('[Razorpay webhook] ignored: event is not a supported subscription event', {
+        webhookEventId,
+        eventName: eventName || null,
+        hasSubscriptionEntity: Boolean(remoteSubscription?.id),
+      });
+
       return res.status(200).json({
         received: true,
         ignored: true,
@@ -502,10 +673,11 @@ exports.handleWebhook = async (req, res) => {
     });
 
     if (!localSubscription) {
-      console.warn(
-        'Ignoring webhook for unrecognised subscription:',
-        remoteSubscription.id
-      );
+      console.warn('[Razorpay webhook] ignored: unrecognised subscription', {
+        webhookEventId,
+        eventName,
+        subscriptionId: remoteSubscription.id,
+      });
 
       // A valid event for a subscription not stored locally should
       // not be allowed to grant credits.
@@ -516,28 +688,41 @@ exports.handleWebhook = async (req, res) => {
     }
 
     if (eventName === 'subscription.charged') {
-      const payment = event.payload?.payment?.entity;
-
       if (!payment?.id) {
+        console.error('[Razorpay webhook] subscription charge has no payment entity', {
+          webhookEventId,
+          subscriptionId: remoteSubscription.id,
+        });
+
         return res.status(400).json({
           error: 'Subscription charge webhook lacks payment details',
         });
       }
 
+      const expectedAmountPaise = Number(localSubscription.priceInr) * 100;
+      const actualAmountPaise = Number(payment.amount);
+      const paymentSubscriptionMismatch = Boolean(
+        payment.subscription_id &&
+        payment.subscription_id !== localSubscription.razorpaySubscriptionId
+      );
+
       if (
         payment.status !== 'captured' ||
         payment.currency !== 'INR' ||
-        payment.amount !== localSubscription.priceInr * 100 ||
-        (
-          payment.subscription_id &&
-          payment.subscription_id !==
-            localSubscription.razorpaySubscriptionId
-        )
+        actualAmountPaise !== expectedAmountPaise ||
+        paymentSubscriptionMismatch
       ) {
-        console.error(
-          'Subscription charge failed validation:',
-          payment.id
-        );
+        console.error('[Razorpay webhook] subscription charge failed validation', {
+          webhookEventId,
+          eventName,
+          subscriptionId: remoteSubscription.id,
+          paymentId: payment.id,
+          paymentStatus: payment.status || null,
+          currency: payment.currency || null,
+          actualAmountPaise: Number.isFinite(actualAmountPaise) ? actualAmountPaise : null,
+          expectedAmountPaise,
+          paymentSubscriptionMismatch,
+        });
 
         return res.status(400).json({
           error:
@@ -552,12 +737,17 @@ exports.handleWebhook = async (req, res) => {
       if (
         existingPayment &&
         (
-          String(existingPayment.user) !==
-            String(localSubscription.user) ||
+          String(existingPayment.user) !== String(localSubscription.user) ||
           existingPayment.planKey !== localSubscription.planKey ||
-          existingPayment.amountPaise !== payment.amount
+          existingPayment.amountPaise !== actualAmountPaise
         )
       ) {
+        console.error('[Razorpay webhook] payment ID conflicts with an existing payment', {
+          webhookEventId,
+          paymentId: payment.id,
+          subscriptionId: remoteSubscription.id,
+        });
+
         return res.status(409).json({
           error: 'Payment ID conflicts with an existing payment record',
         });
@@ -566,9 +756,7 @@ exports.handleWebhook = async (req, res) => {
       const paidAt = unixDate(payment.created_at) || new Date();
 
       // The stable key protects against duplicate webhook deliveries.
-      // If delivery fails after this succeeds, retrying the webhook
-      // will return the existing credit transaction instead of
-      // granting the same billing cycle's credits twice.
+      // Repeated deliveries return the original credit transaction.
       const creditResult = await grantCredits({
         userId: localSubscription.user,
         amount: localSubscription.creditsPerCycle,
@@ -590,11 +778,10 @@ exports.handleWebhook = async (req, res) => {
         user: localSubscription.user,
         provider: 'razorpay',
         planKey: localSubscription.planKey,
-        amountPaise: payment.amount,
+        amountPaise: actualAmountPaise,
         currency: 'INR',
         razorpayPaymentId: payment.id,
-        razorpaySubscriptionId:
-          localSubscription.razorpaySubscriptionId,
+        razorpaySubscriptionId: localSubscription.razorpaySubscriptionId,
       };
 
       if (payment.invoice_id) {
@@ -613,9 +800,7 @@ exports.handleWebhook = async (req, res) => {
             ...paymentFields,
             metadata: {
               source: 'razorpay_subscription_webhook',
-              creditTransactionId: String(
-                creditResult.transaction._id
-              ),
+              creditTransactionId: String(creditResult.transaction._id),
             },
           },
         },
@@ -639,6 +824,16 @@ exports.handleWebhook = async (req, res) => {
         { $set: subscriptionUpdates },
         { runValidators: true }
       );
+
+      console.info('[Razorpay webhook] subscription credits processed', {
+        webhookEventId,
+        subscriptionId: localSubscription.razorpaySubscriptionId,
+        paymentId: payment.id,
+        planKey: localSubscription.planKey,
+        credits: localSubscription.creditsPerCycle,
+        duplicate: Boolean(creditResult.duplicate),
+        creditsGranted: !creditResult.duplicate,
+      });
 
       return res.status(200).json({
         received: true,
@@ -667,6 +862,13 @@ exports.handleWebhook = async (req, res) => {
     }
 
     if (!nextStatus) {
+      console.info('[Razorpay webhook] ignored: no handler for event', {
+        webhookEventId,
+        eventName,
+        subscriptionId: remoteSubscription.id,
+        remoteStatus: remoteSubscription.status || null,
+      });
+
       return res.status(200).json({
         received: true,
         ignored: true,
@@ -684,12 +886,22 @@ exports.handleWebhook = async (req, res) => {
       { runValidators: true }
     );
 
+    console.info('[Razorpay webhook] subscription status updated', {
+      webhookEventId,
+      eventName,
+      subscriptionId: remoteSubscription.id,
+      status: nextStatus,
+    });
+
     return res.status(200).json({
       received: true,
       subscriptionStatus: nextStatus,
     });
   } catch (error) {
-    console.error('Razorpay webhook processing failed:', error.message);
+    console.error('[Razorpay webhook] processing failed', {
+      webhookEventId,
+      error: error.message,
+    });
 
     return res.status(500).json({
       error: 'Webhook processing failed',
