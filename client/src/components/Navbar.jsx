@@ -180,6 +180,17 @@ export default function Navbar() {
                         <span>Workspace Studio</span>
                       </Link>
 
+                      <Link
+                        to="/pricing"
+                        className={`transition hover:text-indigo-600 ${
+                          location.pathname === '/pricing'
+                            ? 'text-indigo-600 font-semibold'
+                            : ''
+                        }`}
+                      >
+                        Pricing
+                      </Link>
+
                       {user?.role === 'admin' && (
                         <Link
                           to="/admin"
