@@ -1,6 +1,22 @@
+
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { Mail, Lock, AlertCircle, Loader2, Eye, EyeOff } from 'lucide-react';
+import {
+  Mail,
+  Lock,
+  AlertCircle,
+  Loader2,
+  Eye,
+  EyeOff,
+} from 'lucide-react';
+
+// Use the configured API URL, with environment-appropriate defaults.
+const API_BASE_URL = (
+  import.meta.env.VITE_API_BASE_URL ||
+  (import.meta.env.PROD
+    ? 'https://imgeditor-api-staging.onrender.com'
+    : 'http://localhost:5000')
+).replace(/\/+$/, '');
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -8,28 +24,27 @@ export default function Login() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
   const navigate = useNavigate();
 
-  // Redirect to workspace if user is already logged in
+  // Redirect to workspace if the user is already logged in.
+  useEffect(() => {
+    const token = localStorage.getItem('token');
 
-useEffect(() => {
-  const token = localStorage.getItem('token');
+    if (!token) return;
 
-  if (!token) return;
+    let user = null;
 
-  let user = null;
+    try {
+      user = JSON.parse(localStorage.getItem('user') || 'null');
+    } catch {
+      localStorage.removeItem('user');
+    }
 
-  try {
-    user = JSON.parse(localStorage.getItem('user') || 'null');
-  } catch {
-    localStorage.removeItem('user');
-  }
-
-  navigate(user?.role === 'admin' ? '/admin' : '/workspace', {
-    replace: true,
-  });
+    navigate(user?.role === 'admin' ? '/admin' : '/workspace', {
+      replace: true,
+    });
   }, [navigate]);
-
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -37,9 +52,11 @@ useEffect(() => {
     setLoading(true);
 
     try {
-      const response = await fetch('http://localhost:5000/api/auth/login', {
+      const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify({ email, password }),
       });
 
@@ -49,13 +66,27 @@ useEffect(() => {
         throw new Error(data.error || 'Failed to login');
       }
 
+      if (!data.token || !data.user) {
+        throw new Error('The server returned an invalid login response');
+      }
+
       localStorage.setItem('token', data.token);
       localStorage.setItem('user', JSON.stringify(data.user));
 
-      // Navigate to workspace and replace history entry
-      navigate('/workspace', { replace: true });
+      // Notify the existing Navbar to synchronize its user state.
+      window.dispatchEvent(new Event('userUpdated'));
+
+      // Preserve role-based navigation after login.
+      navigate(
+        data.user.role === 'admin' ? '/admin' : '/workspace',
+        { replace: true }
+      );
     } catch (err) {
-      setError(err.message);
+      setError(
+        err instanceof TypeError
+          ? 'Unable to connect to the server. Please check your connection and try again.'
+          : err.message || 'Failed to login'
+      );
     } finally {
       setLoading(false);
     }
@@ -65,8 +96,12 @@ useEffect(() => {
     <div className="min-h-[calc(100vh-4rem)] flex items-center justify-center p-4">
       <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm max-w-md w-full space-y-6">
         <div className="text-center space-y-1">
-          <h1 className="text-2xl font-bold !text-slate-900 tracking-tight">Welcome back</h1>
-          <p className="text-xs text-slate-500">Sign in to access your workspace and AI tools</p>
+          <h1 className="text-2xl font-bold !text-slate-900 tracking-tight">
+            Welcome back
+          </h1>
+          <p className="text-xs text-slate-500">
+            Sign in to access your workspace and AI tools
+          </p>
         </div>
 
         {error && (
@@ -78,7 +113,10 @@ useEffect(() => {
 
         <form onSubmit={handleSubmit} className="space-y-4 text-left">
           <div>
-            <label className="text-xs font-semibold text-slate-600 block mb-1.5">Email Address</label>
+            <label className="text-xs font-semibold text-slate-600 block mb-1.5">
+              Email Address
+            </label>
+
             <div className="relative">
               <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
               <input
@@ -93,9 +131,13 @@ useEffect(() => {
           </div>
 
           <div>
-            <label className="text-xs font-semibold text-slate-600 block mb-1.5">Password</label>
+            <label className="text-xs font-semibold text-slate-600 block mb-1.5">
+              Password
+            </label>
+
             <div className="relative">
               <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
+
               <input
                 type={showPassword ? 'text' : 'password'}
                 required
@@ -104,13 +146,16 @@ useEffect(() => {
                 placeholder="Password"
                 className="w-full pl-10 pr-11 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-indigo-600"
               />
+
               <button
                 type="button"
                 onClick={() => setShowPassword((prev) => !prev)}
                 className="absolute inset-y-0 right-0 flex items-center pr-3.5 text-slate-400 hover:text-slate-600 focus:outline-none"
                 aria-label={showPassword ? 'Hide password' : 'Show password'}
               >
-                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                {showPassword
+                  ? <EyeOff className="w-4 h-4" />
+                  : <Eye className="w-4 h-4" />}
               </button>
             </div>
           </div>
@@ -120,13 +165,18 @@ useEffect(() => {
             disabled={loading}
             className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 rounded-xl transition flex items-center justify-center gap-2 text-sm disabled:opacity-50"
           >
-            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Sign In'}
+            {loading
+              ? <Loader2 className="w-4 h-4 animate-spin" />
+              : 'Sign In'}
           </button>
         </form>
 
         <p className="text-center text-xs text-slate-500">
           Don't have an account?{' '}
-          <Link to="/register" className="text-indigo-600 font-bold hover:underline">
+          <Link
+            to="/register"
+            className="text-indigo-600 font-bold hover:underline"
+          >
             Sign up
           </Link>
         </p>
