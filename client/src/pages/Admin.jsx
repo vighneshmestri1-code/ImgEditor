@@ -668,7 +668,7 @@ export default function Admin() {
         <section aria-labelledby="overview-heading">
           <div className="mb-4 flex items-end justify-between gap-3">
             <div>
-              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-indigo-600">
+              <p className="text-2xl font-bold !text-slate-900 tracking-tight">
                 Overview
               </p>
               <h2
@@ -1151,7 +1151,7 @@ export default function Admin() {
               </p>
 
               <div className="mt-1 flex flex-wrap items-center gap-3">
-                <h2 className="text-xl font-extrabold tracking-tight text-slate-900">
+                <h2 className="text-2xl font-bold !text-slate-900 tracking-tight">
                   User management
                 </h2>
 
