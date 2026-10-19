@@ -668,7 +668,7 @@ export default function Admin() {
         <section aria-labelledby="overview-heading">
           <div className="mb-4 flex items-end justify-between gap-3">
             <div>
-              <p className="text-2xl font-bold !text-slate-900 tracking-tight">
+              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-blue-600 ">
                 Overview
               </p>
               <h2
