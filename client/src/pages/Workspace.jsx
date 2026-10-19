@@ -1,13 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { 
-  Scissors, 
-  ImageIcon, 
-  Sparkles, 
-  Maximize2, 
-  Upload, 
-  Download, 
-  Loader2, 
+import {
+  Scissors,
+  ImageIcon,
+  Sparkles,
+  Maximize2,
+  Upload,
+  Download,
+  Loader2,
   AlertCircle,
   Sliders,
   RotateCcw,
@@ -16,8 +16,17 @@ import {
   FlipVertical,
   RefreshCw,
   PlusCircle,
-  Wand2
+  Wand2,
 } from 'lucide-react';
+
+// Use localhost during development and the deployed API for production.
+// VITE_API_BASE_URL can override either default through the environment.
+const API_BASE_URL = (
+  import.meta.env.VITE_API_BASE_URL ||
+  (import.meta.env.PROD
+    ? 'https://imgeditor-api-staging.onrender.com'
+    : 'http://localhost:5000')
+).replace(/\/+$/, '');
 
 // Custom Image Viewer Component
 function ImageCompareSlider({ originalUrl, processedUrl, activeTool }) {
@@ -66,12 +75,12 @@ function ImageCompareSlider({ originalUrl, processedUrl, activeTool }) {
             PROCESSED RESULT
           </span>
         )}
-        <img 
-          src={displayUrl} 
-          alt="Preview Output" 
+        <img
+          src={displayUrl}
+          alt="Preview Output"
           className="max-h-[460px] max-w-full object-contain rounded-xl shadow-sm"
-          onError={(e) => {
-            console.error("Failed to render image source:", displayUrl);
+          onError={() => {
+            console.error('Failed to render image source:', displayUrl);
           }}
         />
       </div>
@@ -82,9 +91,9 @@ function ImageCompareSlider({ originalUrl, processedUrl, activeTool }) {
   if (originalUrl && !processedUrl) {
     return (
       <div className="w-full h-full min-h-[380px] max-h-[500px] flex items-center justify-center rounded-2xl overflow-hidden bg-slate-100 border border-slate-200">
-        <img 
-          src={originalUrl} 
-          alt="Source Preview" 
+        <img
+          src={originalUrl}
+          alt="Source Preview"
           className="max-h-[480px] max-w-full object-contain rounded-xl"
         />
       </div>
@@ -93,7 +102,7 @@ function ImageCompareSlider({ originalUrl, processedUrl, activeTool }) {
 
   // Before / After Comparison Slider EXCLUSIVELY FOR IMAGE EDITOR
   return (
-    <div 
+    <div
       ref={containerRef}
       className="relative w-full h-full min-h-[380px] max-h-[500px] rounded-2xl overflow-hidden select-none border border-slate-200 cursor-ew-resize flex items-center justify-center bg-[radial-gradient(#e2e8f0_1px,transparent_1px)] [background-size:16px_16px]"
       onMouseDown={() => setIsDragging(true)}
@@ -101,19 +110,19 @@ function ImageCompareSlider({ originalUrl, processedUrl, activeTool }) {
       onMouseMove={handleMouseMove}
       onTouchMove={handleTouchMove}
     >
-      <img 
-        src={processedUrl} 
-        alt="After" 
+      <img
+        src={processedUrl}
+        alt="After"
         className="absolute inset-0 w-full h-full object-contain pointer-events-none select-none"
       />
 
-      <div 
+      <div
         className="absolute inset-0 overflow-hidden pointer-events-none select-none"
         style={{ clipPath: `inset(0 ${100 - sliderPosition}% 0 0)` }}
       >
-        <img 
-          src={originalUrl} 
-          alt="Before" 
+        <img
+          src={originalUrl}
+          alt="Before"
           className="absolute inset-0 w-full h-full object-contain pointer-events-none select-none"
         />
       </div>
@@ -125,7 +134,7 @@ function ImageCompareSlider({ originalUrl, processedUrl, activeTool }) {
         AFTER
       </span>
 
-      <div 
+      <div
         className="absolute top-0 bottom-0 w-0.5 bg-white z-20 shadow-md pointer-events-none"
         style={{ left: `${sliderPosition}%` }}
       >
@@ -171,12 +180,21 @@ export default function Workspace() {
   ];
 
   const samplePrompts = [
-    "A futuristic city with flying vehicles at sunset, digital art",
-    "A cute golden retriever wearing a space helmet, cinematic lighting",
-    "Minimalist tropical beach landscape, oil painting style"
+    'A futuristic city with flying vehicles at sunset, digital art',
+    'A cute golden retriever wearing a space helmet, cinematic lighting',
+    'Minimalist tropical beach landscape, oil painting style',
   ];
 
   const activeToolObj = tools.find((t) => t.id === activeTool) || tools[0];
+
+  const handleResetEditor = () => {
+    setBrightness(100);
+    setContrast(100);
+    setSaturation(100);
+    setRotation(0);
+    setFlipH(false);
+    setFlipV(false);
+  };
 
   const handleClearImage = () => {
     setSelectedFile(null);
@@ -195,14 +213,17 @@ export default function Workspace() {
 
   useEffect(() => {
     handleClearImage();
+    // Preserve the original behavior of clearing the image on tool changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTool]);
 
   useEffect(() => {
-    if (activeTool !== 'image-editor' || !previewUrl) return;
+    if (activeTool !== 'image-editor' || !previewUrl) return undefined;
 
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.src = previewUrl;
+
     img.onload = () => {
       const canvas = canvasRef.current || document.createElement('canvas');
       const ctx = canvas.getContext('2d');
@@ -213,43 +234,23 @@ export default function Workspace() {
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.save();
-
       ctx.translate(canvas.width / 2, canvas.height / 2);
       ctx.rotate((rotation * Math.PI) / 180);
       ctx.scale(flipH ? -1 : 1, flipV ? -1 : 1);
-
       ctx.filter = `brightness(${brightness}%) contrast(${contrast}%) saturate(${saturation}%)`;
-
-      ctx.drawImage(
-        img,
-        -img.width / 2,
-        -img.height / 2,
-        img.width,
-        img.height
-      );
-
+      ctx.drawImage(img, -img.width / 2, -img.height / 2, img.width, img.height);
       ctx.restore();
 
-      const dataUrl = canvas.toDataURL('image/png');
-      setEditorPreviewUrl(dataUrl);
+      setEditorPreviewUrl(canvas.toDataURL('image/png'));
     };
+
   }, [previewUrl, brightness, contrast, saturation, rotation, flipH, flipV, activeTool]);
 
-  const handleResetEditor = () => {
-    setBrightness(100);
-    setContrast(100);
-    setSaturation(100);
-    setRotation(0);
-    setFlipH(false);
-    setFlipV(false);
-  };
-
   const handleFileChange = (e) => {
-    const file = e.target.files[0];
+    const file = e.target.files?.[0];
     if (file) {
       setSelectedFile(file);
-      const url = URL.createObjectURL(file);
-      setPreviewUrl(url);
+      setPreviewUrl(URL.createObjectURL(file));
       setResultUrl(null);
       setError('');
       handleResetEditor();
@@ -270,7 +271,6 @@ export default function Workspace() {
         }
         const blob = new Blob([u8arr], { type: mime });
         const blobUrl = URL.createObjectURL(blob);
-
         const link = document.createElement('a');
         link.href = blobUrl;
         link.download = `${filenamePrefix}-${Date.now()}.${mime.includes('png') ? 'png' : 'jpg'}`;
@@ -288,14 +288,13 @@ export default function Workspace() {
       }
     } catch (err) {
       console.error('Download failed:', err);
+      setError('Unable to download the image. Please try again.');
     }
   };
 
   const handleDownload = () => {
     if (activeTool === 'image-editor') {
-      if (editorPreviewUrl) {
-        handleDownloadUrl(editorPreviewUrl, 'edited-image');
-      }
+      if (editorPreviewUrl) handleDownloadUrl(editorPreviewUrl, 'edited-image');
     } else if (resultUrl) {
       handleDownloadUrl(resultUrl, `ai-${activeTool}`);
     }
@@ -309,7 +308,7 @@ export default function Workspace() {
     setResultUrl(null);
 
     const token = localStorage.getItem('token');
-    
+
     if (!token) {
       setLoading(false);
       setError('You must be logged in to use AI tools.');
@@ -317,26 +316,29 @@ export default function Workspace() {
       return;
     }
 
-    const endpoint = `http://localhost:5000/api/tools/${activeTool}`;
+    // The required production fix: use the deployed API instead of localhost.
+    const endpoint = `${API_BASE_URL}/api/tools/${activeTool}`;
 
     try {
       let response;
 
       if (activeTool === 'text-to-image') {
-        if (!prompt.trim()) throw new Error('Please enter a prompt to generate an image.');
+        if (!prompt.trim()) {
+          throw new Error('Please enter a prompt to generate an image.');
+        }
 
         response = await fetch(endpoint, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
+            Authorization: `Bearer ${token}`,
           },
-          body: JSON.stringify({ 
-            prompt: prompt.trim()
-          })
+          body: JSON.stringify({ prompt: prompt.trim() }),
         });
       } else {
-        if (!selectedFile) throw new Error('Please select an image file first.');
+        if (!selectedFile) {
+          throw new Error('Please select an image file first.');
+        }
 
         const formData = new FormData();
         formData.append('image', selectedFile);
@@ -348,9 +350,9 @@ export default function Workspace() {
         response = await fetch(endpoint, {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${token}`
+            Authorization: `Bearer ${token}`,
           },
-          body: formData
+          body: formData,
         });
       }
 
@@ -371,19 +373,22 @@ export default function Workspace() {
       if (contentType.includes('application/json')) {
         const data = await response.json();
         const outputImageUrl = data.url || data.image || data.resultUrl || data.result;
-        if (!outputImageUrl) throw new Error('Image URL or Data was not returned by the server response.');
+        if (!outputImageUrl) {
+          throw new Error('Image URL or data was not returned by the server response.');
+        }
         setResultUrl(outputImageUrl);
       } else {
         const blob = await response.blob();
         setResultUrl(URL.createObjectURL(blob));
       }
 
+      // Keep the existing local counter update and notify the Navbar.
+      // The server remains authoritative; the Navbar refreshes from /api/auth/me.
       const storedUser = JSON.parse(localStorage.getItem('user') || '{}');
       if (storedUser && typeof storedUser.credits === 'number') {
         storedUser.credits = Math.max(0, storedUser.credits - 1);
         localStorage.setItem('user', JSON.stringify(storedUser));
       }
-
     } catch (err) {
       setError(err.message || 'An error occurred during execution.');
     } finally {
@@ -424,15 +429,14 @@ export default function Workspace() {
 
       {/* Main Workspace Card Container */}
       <div className="w-full max-w-6xl bg-white rounded-2xl p-6 sm:p-8 border border-slate-200 shadow-sm grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch">
-        
         {/* Left Preview Section */}
         <div className="lg:col-span-7 flex flex-col justify-center items-center relative min-h-[420px]">
           {previewUrl || currentOutputUrl ? (
             <div className="w-full h-full flex flex-col items-center justify-center">
-              <ImageCompareSlider 
-                originalUrl={previewUrl} 
-                processedUrl={currentOutputUrl} 
-                activeTool={activeTool} 
+              <ImageCompareSlider
+                originalUrl={previewUrl}
+                processedUrl={currentOutputUrl}
+                activeTool={activeTool}
               />
             </div>
           ) : (
@@ -459,7 +463,6 @@ export default function Workspace() {
         {/* Right Operations Panel */}
         <div className="lg:col-span-5 bg-slate-50 border border-slate-200 rounded-2xl p-6 text-slate-800 flex flex-col justify-between shadow-sm">
           <div className="space-y-5">
-            
             <div className="border-b border-slate-200 pb-3">
               <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
                 <activeToolObj.icon className="w-4 h-4 text-blue-600" />
@@ -479,12 +482,12 @@ export default function Workspace() {
                     {selectedFile ? selectedFile.name : 'Click to Upload Image'}
                   </span>
                   <span className="text-[10px] text-slate-400 mt-1">PNG, JPG, WEBP up to 10MB</span>
-                  <input 
-                    ref={fileInputRef} 
-                    type="file" 
-                    accept="image/*" 
-                    onChange={handleFileChange} 
-                    className="hidden" 
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={handleFileChange}
+                    className="hidden"
                   />
                 </label>
               </div>
@@ -699,9 +702,7 @@ export default function Workspace() {
               <span>Clear / Reset</span>
             </button>
           </div>
-
         </div>
-
       </div>
     </div>
   );
