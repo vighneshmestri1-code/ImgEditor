@@ -221,3 +221,43 @@ exports.login = async (req, res) => {
     return res.status(500).json({ error: error.message || 'Login failed' });
   }
 };
+// GET /api/auth/me
+// Return fresh account data, including the current credit balance.
+exports.getMe = async (req, res) => {
+  try {
+    const userId = req.user?._id || req.user?.id;
+
+    if (!userId) {
+      return res.status(401).json({
+        error: 'Authentication required',
+      });
+    }
+
+    const user = await User.findById(userId)
+      .select('name username email role credits')
+      .lean();
+
+    if (!user) {
+      return res.status(404).json({
+        error: 'User not found',
+      });
+    }
+
+    return res.status(200).json({
+      user: {
+        id: String(user._id),
+        name: user.name || '',
+        username: user.username || '',
+        email: user.email,
+        role: user.role,
+        credits: Number(user.credits ?? 0),
+      },
+    });
+  } catch (error) {
+    console.error('Fetch current user error:', error.message);
+
+    return res.status(500).json({
+      error: 'Failed to fetch current user',
+    });
+  }
+};
